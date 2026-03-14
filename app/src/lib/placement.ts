@@ -1,12 +1,17 @@
 // =============================================================================
-// placement.ts — Golden Integration Point Engine
+// placement.ts — Perfect Entry Point Engine  (AI Ad Injection Mode)
 //
-// Single source of truth for the entire ad-placement scoring pipeline.
-// Import from this file only; no other scoring files exist.
+// Philosophy shift:
+//   OLD → find a "natural break" where the video breathes
+//   NEW → find the peak-energy moment to inject AI-generated ad footage
+//
+// The AI ad is inserted as new footage that PUSHES the original video forward.
+// No silence needed. We want the viewer at maximum attention, then cut in.
 //
 // Teammate handoff contract:
-//   frame_a_time → last frame of the high-energy hook  (Peak Intensity)
-//   frame_b_time → first frame of the new section      (The Pivot)
+//   frame_a_time        → last frame of the peak-energy segment (reference for AI lighting)
+//   frame_b_time        → frame_a_time + 0.1s  (clean bridge — always a hair after A)
+//   ad_duration_to_inject → how many seconds of AI footage to insert at this point
 // =============================================================================
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -19,13 +24,15 @@ export interface TranscriptSegment {
   duration: number; // seconds
 }
 
-/** Primary output — one ad placement candidate */
+/** Primary output — one AI ad injection candidate */
 export interface GoldenSpot {
   spot_id: string;
   timestamp: string;
-  intensity_score: number;       // 0–100
-  frame_a_time: number;          // seconds — last frame of the hook segment
-  frame_b_time: number;          // seconds — first frame of the new section
+  intensity_score: number;          // 0–100 — higher = more energy at this moment
+  frame_a_time: number;             // seconds — last frame of the peak-energy segment
+  frame_b_time: number;             // seconds — frame_a_time + 0.1 (clean bridge)
+  ad_duration_to_inject: number;    // seconds of AI ad footage to insert here (default 15)
+  last_creator_words: string;       // exact words the creator said just before the cut
   context: string;
   language: Lang;
   ai_prompt_suggestion: string;
@@ -41,7 +48,7 @@ export interface PlacementWindow {
 
 // ─── Multilingual keyword dictionaries ───────────────────────────────────────
 // Each entry: raw string terms → compiled at module load into a single RegExp.
-// Add new terms by appending strings to the `terms` array — no regex knowledge needed.
+// Add new terms by appending to the `terms` array — no regex knowledge needed.
 
 type KW = { pattern: RegExp; weight: number; label: string };
 
@@ -50,73 +57,64 @@ function compile(terms: string[], weight: number, label: string): KW {
   return { pattern: new RegExp(`(${escaped.join("|")})`, "i"), weight, label };
 }
 
-// Hook keywords — signal a high-energy climax or reveal in the previous segment
+// Hook keywords — signal a high-energy climax or reveal in the current segment.
+// These are the PRIMARY scoring driver (replaces silence as the main signal).
 const HOOKS: Record<Lang, KW[]> = {
   en: [
-    // High-energy exclamations — very common in challenge/reaction content
-    compile(["insane", "incredible", "unbelievable", "mind-blowing", "mind blowing", "unreal"], 20, "wow moment"),
-    compile(["impossible", "no way", "oh my god", "oh my gosh", "what the heck"],              20, "wow moment"),
-    compile(["crazy", "absolutely crazy", "this is crazy", "that's crazy"],                    18, "wow moment"),
-    // Reveal / secret
-    compile(["the secret is", "the secret to", "turns out", "the answer is"],                  18, "secret reveal"),
-    // Visual hooks — direct viewer attention
-    compile(["look at this", "watch this", "check this out", "look at that"],                  15, "visual hook"),
-    // Challenge / competition vocabulary (MrBeast core)
-    compile(["challenge", "win", "won", "lost", "survived", "eliminated", "last one"],         15, "challenge hook"),
-    compile(["$100", "$1,000", "$10,000", "$100,000", "$1,000,000", "million dollars"],        20, "prize reveal"),
+    compile(["insane", "incredible", "unbelievable", "mind-blowing", "mind blowing", "unreal"], 25, "wow moment"),
+    compile(["impossible", "no way", "oh my god", "oh my gosh", "what the heck"],              25, "wow moment"),
+    compile(["crazy", "absolutely crazy", "this is crazy", "that's crazy"],                    22, "wow moment"),
+    compile(["the secret is", "the secret to", "turns out", "the answer is"],                  22, "secret reveal"),
+    compile(["look at this", "watch this", "check this out", "look at that"],                  18, "visual hook"),
+    compile(["challenge", "win", "won", "lost", "survived", "eliminated", "last one"],         18, "challenge hook"),
+    compile(["$100", "$1,000", "$10,000", "$100,000", "$1,000,000", "million dollars"],        25, "prize reveal"),
     compile(["subscribe", "if you subscribe", "click subscribe"],                              12, "cta hook"),
-    // Novelty
-    compile(["never seen", "never done", "never been done", "first time ever", "first ever"],  15, "novelty hook"),
-    compile(["world record", "guinness", "record-breaking", "largest ever", "biggest ever"],   20, "record hook"),
-    // Emphasis markers
-    compile(["literally", "honestly", "genuinely", "actually"],                                 8, "emphasis"),
-    // Urgency / stakes
-    compile(["you need to", "you won't believe", "trust me", "i promise"],                     12, "urgency"),
-    compile(["about to", "right now", "happening right now"],                                  10, "live urgency"),
-    // Results / payoff
-    compile(["it worked", "it actually worked", "we did it", "we won", "we lost"],             15, "result reveal"),
-    compile(["doubled", "tripled", "10x", "times more", "times faster"],                       15, "metric spike"),
-    // Transformation
-    compile(["completely changed", "changed my life", "game changer", "everything changed"],   18, "transformation"),
+    compile(["never seen", "never done", "never been done", "first time ever", "first ever"],  18, "novelty hook"),
+    compile(["world record", "guinness", "record-breaking", "largest ever", "biggest ever"],   25, "record hook"),
+    compile(["literally", "honestly", "genuinely", "actually"],                                10, "emphasis"),
+    compile(["you need to", "you won't believe", "trust me", "i promise"],                     15, "urgency"),
+    compile(["about to", "right now", "happening right now"],                                  12, "live urgency"),
+    compile(["it worked", "it actually worked", "we did it", "we won", "we lost"],             18, "result reveal"),
+    compile(["doubled", "tripled", "10x", "times more", "times faster"],                       18, "metric spike"),
+    compile(["completely changed", "changed my life", "game changer", "everything changed"],   22, "transformation"),
   ],
   fr: [
-    compile(["incroyable", "incroyablement"],                                    20, "wow moment"),
-    compile(["dingue", "fou", "folle", "ouf", "magique"],                        18, "wow moment"),
-    compile(["le secret est", "le secret c'est"],                                18, "secret reveal"),
-    compile(["regardez", "regardez bien", "regardez ça"],                        15, "visual hook"),
-    compile(["jamais vu", "première fois", "jamais fait"],                       15, "novelty hook"),
-    compile(["littéralement", "franchement", "honnêtement", "vraiment"],          8, "emphasis"),
-    compile(["vous devez", "vous allez pas y croire", "croyez-moi"],             12, "urgency"),
-    compile(["résultats", "ce qui s'est passé", "ça a marché", "réussi"],        10, "result reveal"),
-    compile(["ça change tout", "complètement changé", "révolutionnaire"],        18, "transformation"),
-    compile(["doublé", "triplé", "fois plus"],                                   15, "metric spike"),
+    compile(["incroyable", "incroyablement"],                                    25, "wow moment"),
+    compile(["dingue", "fou", "folle", "ouf", "magique"],                        22, "wow moment"),
+    compile(["le secret est", "le secret c'est"],                                22, "secret reveal"),
+    compile(["regardez", "regardez bien", "regardez ça"],                        18, "visual hook"),
+    compile(["jamais vu", "première fois", "jamais fait"],                       18, "novelty hook"),
+    compile(["littéralement", "franchement", "honnêtement", "vraiment"],         10, "emphasis"),
+    compile(["vous devez", "vous allez pas y croire", "croyez-moi"],             15, "urgency"),
+    compile(["résultats", "ce qui s'est passé", "ça a marché", "réussi"],        15, "result reveal"),
+    compile(["ça change tout", "complètement changé", "révolutionnaire"],        22, "transformation"),
+    compile(["doublé", "triplé", "fois plus"],                                   18, "metric spike"),
     compile(["enfin"],                                                            12, "relief moment"),
   ],
 };
 
-// Pivot keywords — signal a new section opening in the next segment
+// Pivot keywords — signal a section opener in the next segment.
+// Still scored but at lower weight — they confirm the energy peak is ending.
 const PIVOTS: Record<Lang, KW[]> = {
   en: [
-    compile(["but first", "before we go", "before i get", "before we continue"], 30, "classic pivot"),
-    compile(["speaking of", "on that note", "with that said"],                   28, "soft pivot"),
-    compile(["now let's", "now i want", "now before"],                           25, "now-pivot"),
-    compile(["alright", "okay so", "so anyway", "so moving on"],                 22, "section opener"),
-    compile(["next up", "moving on", "let's talk", "let's move"],                20, "topic shift"),
+    compile(["but first", "before we go", "before i get", "before we continue"], 20, "classic pivot"),
+    compile(["speaking of", "on that note", "with that said"],                   18, "soft pivot"),
+    compile(["now let's", "now i want", "now before"],                           15, "now-pivot"),
+    compile(["alright", "okay so", "so anyway", "so moving on"],                 12, "section opener"),
+    compile(["next up", "moving on", "let's talk", "let's move"],                10, "topic shift"),
     compile(["real quick", "quickly before", "quickly let me"],                  18, "sponsor bridge"),
   ],
   fr: [
-    compile(["mais avant", "avant de continuer", "avant d'aller plus loin"],     30, "classic pivot"),
-    compile(["en parlant de", "à ce propos", "dans la même veine"],              28, "soft pivot"),
-    compile(["maintenant", "passons à", "passons maintenant"],                   25, "now-pivot"),
-    compile(["d'ailleurs", "en fait", "du coup", "bref"],                        22, "section opener"),
-    compile(["ensuite", "on passe à", "parlons de"],                             20, "topic shift"),
+    compile(["mais avant", "avant de continuer", "avant d'aller plus loin"],     20, "classic pivot"),
+    compile(["en parlant de", "à ce propos", "dans la même veine"],              18, "soft pivot"),
+    compile(["maintenant", "passons à", "passons maintenant"],                   15, "now-pivot"),
+    compile(["d'ailleurs", "en fait", "du coup", "bref"],                        12, "section opener"),
+    compile(["ensuite", "on passe à", "parlons de"],                             10, "topic shift"),
     compile(["rapidement", "vite fait", "juste avant"],                          18, "sponsor bridge"),
   ],
 };
 
 // ─── Language detection ───────────────────────────────────────────────────────
-// Counts high-frequency function words (EN vs FR) across the full transcript.
-// No external library — runs in-memory in < 1ms.
 
 const EN_MARKERS = /\b(the|and|is|are|was|were|this|that|with|for|you|have|been|they)\b/gi;
 const FR_MARKERS = /\b(le|la|les|un|une|des|est|sont|avec|pour|vous|nous|ils|elles|que|qui|dans|sur)\b/gi;
@@ -137,8 +135,7 @@ function wpm(seg: TranscriptSegment): number {
 
 /**
  * Sum hook keyword weights found in text.
- * Cap is raised to 50 if a hook keyword is followed by "!" (hype amplifier).
- * e.g. "Incroyable !" scores higher than a plain "incroyable".
+ * Cap raised to 60 if a hook keyword is paired with "!" (hype amplifier).
  */
 function hookDensity(text: string, lang: Lang): { score: number; label: string; hasExclaim: boolean } {
   let score = 0;
@@ -156,8 +153,7 @@ function hookDensity(text: string, lang: Lang): { score: number; label: string; 
     }
   }
 
-  // Hype amplifier: keyword + "!" unlocks a higher cap (50 instead of 40)
-  const cap = hasKeywordHit && hasExclaim ? 50 : 40;
+  const cap = hasKeywordHit && hasExclaim ? 60 : 50;
   return { score: Math.min(score, cap), label, hasExclaim };
 }
 
@@ -173,172 +169,130 @@ function firstWords(text: string, n = 6): string {
   return text.trim().split(/\s+/).slice(0, n).join(" ").replace(/[,.]$/, "");
 }
 
-// ─── Core gap scorer ──────────────────────────────────────────────────────────
-// Evaluates the transition between segment[i] (prev) and segment[i+1] (next).
-// Returns null if the gap falls outside the 20%–70% safety zone.
+/** Last N words of a segment — used as the "creator's exact words before cut" */
+function lastWords(text: string, n = 10): string {
+  const words = text.trim().split(/\s+/);
+  return words.slice(-n).join(" ").replace(/^[,.\s]+/, "");
+}
+
+// ─── Core segment scorer ──────────────────────────────────────────────────────
+// Evaluates segment[i] as a potential ad injection point.
+// Silence is IGNORED — the AI ad is inserted as new footage, pushing the video.
+// Score = f(WPM spike, Hype Bonus, Hook Keywords, Pivot, Sentence Boundary).
 
 interface ScoredGap {
-  frameA: number;         // = end of prev segment  (frame_a_time)
-  frameB: number;         // = start of next segment (frame_b_time)
-  silenceSec: number;     // gap between the two frames
-  intensityScore: number; // final 0–100 score
-  prevTopic: string;
-  nextTopic: string;
+  frameA: number;           // end of prev segment = injection point
+  frameB: number;           // frameA + 0.1s       = clean bridge
+  intensityScore: number;   // final 0–100 score
+  prevTopic: string;        // first words of prev segment (context)
+  nextTopic: string;        // first words of next segment (context)
+  lastCreatorWords: string; // last words of prev segment (for AI prompt)
   hookLabel: string;
   pivotLabel: string;
   wpmSpike: boolean;
   lang: Lang;
 }
 
-function scoreGap(
+const AD_DURATION_DEFAULT = 15; // seconds of AI footage to inject
+
+function scoreSegment(
   prev: TranscriptSegment,
   next: TranscriptSegment,
   totalDuration: number,
   lang: Lang,
-  pacing: PacingProfile,
 ): ScoredGap | null {
   const frameA = prev.start + prev.duration;
-  const frameB = next.start;
 
-  // Raw gap — can be slightly negative due to subtitle timing overlap.
-  // Overlaps < 1s are treated as zero (caption jitter, not real speech overlap).
-  const rawGap     = frameB - frameA;
-  const silenceSec = rawGap >= -1.0 ? Math.max(0, rawGap) : rawGap;
-
-  // Hard filter: only score gaps inside 20%–70% of video length.
+  // Hard filter: only score inside 20%–75% of video length.
   // Too early = viewer still in intro; too late = risk of abandonment.
   const relPos = frameA / totalDuration;
-  if (relPos < 0.20 || relPos > 0.70) return null;
+  if (relPos < 0.20 || relPos > 0.75) return null;
 
   let score = 0;
 
-  // 1. WPM Spike (0–25 pts) ─────────────────────────────────────────────────
-  // If prev was spoken 20%+ faster than next, the speaker just finished
-  // a high-intensity burst and is slowing down — a natural breath.
-  // Formula: min((prevWPM/nextWPM - 1) × 50, 25)
+  // 1. WPM Spike (0–35 pts) ─────────────────────────────────────────────────
+  // prev spoken 20%+ faster than next → speaker just hit a climax.
+  // Higher ratio = more intense the peak. Formula: min((ratio-1) × 70, 35).
   const prevWPM  = wpm(prev);
   const nextWPM  = wpm(next);
   const wpmSpike = prevWPM > nextWPM * 1.20;
-  if (wpmSpike) score += Math.min((prevWPM / (nextWPM || 1) - 1) * 50, 25);
+  if (wpmSpike) score += Math.min((prevWPM / (nextWPM || 1) - 1) * 70, 35);
 
-  // 1b. Hype Bonus (+15 pts) ────────────────────────────────────────────────
-  // A very short segment (< 2s) delivered at high speed is almost always
-  // a punchline or exclamation — the speaker's most intense moment.
-  if (prev.duration < 2.0 && prevWPM > 120) score += 15;
+  // 2. Hype Bonus (+20 pts) ─────────────────────────────────────────────────
+  // Very short segment (< 2s) at high speed = punchline or exclamation.
+  // The single most intense unit of speech possible.
+  if (prev.duration < 2.0 && prevWPM > 120) score += 20;
 
-  // 2. Hook keyword density on prev (0–40 pts, up to 50 if keyword + "!") ──
-  // High-engagement words ("incroyable!", "insane", "the secret is…") signal
-  // the viewer's attention peaked — ideal moment to capitalise before a cut.
+  // 3. Hook keyword density (0–60 pts) ─────────────────────────────────────
+  // PRIMARY DRIVER — "insane!", "we won!", "secret is…" signal viewer is at
+  // peak attention. This is where we inject the AI ad.
   const hook = hookDensity(prev.text, lang);
   score += hook.score;
 
-  // 3. Relative silence gap (0–20 pts) ─────────────────────────────────────
-  // Thresholds are relative to the video's own average silence (pacing profile).
-  // A 0.4s gap in a fast-edited MrBeast video scores the same as a 2s gap in
-  // a slow vlog — both are unusually long pauses for their respective content.
-  // Gate = avg × 1.5; Formula: min(silenceSec / synergyGate × 20, 20)
-  if (silenceSec >= pacing.silenceGate) {
-    score += Math.min((silenceSec / pacing.synergyGate) * 20, 20);
-  }
-
-  // 3b. Synergy Bonus (+20 pts) — the "Golden Moment" ──────────────────────
-  // Hook keyword AND a relatively long silence = attention peaked + real breath.
-  // synergyGate is calibrated per-video: avg × 3 (so it's always proportional).
-  if (hook.score > 0 && silenceSec >= pacing.synergyGate) score += 20;
-
-  // 4. Pivot keyword on next segment (0–30 pts) ─────────────────────────────
-  // Words like "but first", "mais avant", "now let's" explicitly signal
-  // the speaker is opening a new section — the strongest placement signal.
+  // 4. Pivot keyword on next segment (0–20 pts) ─────────────────────────────
+  // "But first", "moving on" etc. confirm the energy peak is closing —
+  // the viewer won't miss a beat if we cut here.
   const pivot = pivotStrength(next.text, lang);
   if (pivot) score += pivot.score;
 
-  // 5. Clean sentence boundary on prev (0–10 pts) ───────────────────────────
-  // A segment ending in . ? ! means no mid-sentence cut — cleaner for UX.
-  if (/[.?!](\s|$)/.test(prev.text.trimEnd())) score += 10;
+  // 5. Clean sentence boundary on prev (+5 pts) ─────────────────────────────
+  // Segment ends in . ? ! → no mid-sentence cut, smoother for the viewer.
+  if (/[.?!](\s|$)/.test(prev.text.trimEnd())) score += 5;
 
   return {
     frameA,
-    frameB,
-    silenceSec,
-    intensityScore: Math.min(100, Math.round(score)),
-    prevTopic:      firstWords(prev.text),
-    nextTopic:      firstWords(next.text),
-    hookLabel:      hook.label || "energy peak",
-    pivotLabel:     pivot?.label ?? "natural pause",
+    frameB:           parseFloat((frameA + 0.1).toFixed(3)),
+    intensityScore:   Math.min(100, Math.round(score)),
+    prevTopic:        firstWords(prev.text),
+    nextTopic:        firstWords(next.text),
+    lastCreatorWords: lastWords(prev.text),
+    hookLabel:        hook.label || "energy peak",
+    pivotLabel:       pivot?.label ?? "energy cut",
     wpmSpike,
     lang,
   };
 }
 
 // ─── AI prompt builder ────────────────────────────────────────────────────────
+// Generates an aggressive "Transition Hook" prompt.
+// The AI spokesperson must feel like a natural continuation of the creator's words.
 
 const TONE: Record<Lang, string> = { en: "Enthusiastic/English", fr: "Enthousiaste/French" };
 
 function buildPrompt(gap: ScoredGap): string {
-  const parts = [
-    `Match lighting of Frame A for a seamless AI spokesperson transition.`,
-    `High energy detected. Tone: ${TONE[gap.lang]}.`,
-  ];
-  if (gap.wpmSpike)
-    parts.push("High-pacing segment — confident, energetic delivery.");
-  if (gap.hookLabel === "secret reveal" || gap.hookLabel === "result reveal")
-    parts.push("Viewer in high-curiosity state — open sponsor with a hook.");
-  if (gap.silenceSec >= 1.5)
-    parts.push("Long natural pause — smooth fade-in recommended.");
-  if (gap.pivotLabel === "classic pivot" || gap.pivotLabel === "sponsor bridge")
-    parts.push("Pivot phrase detected — match audio for seamless entry.");
-  return parts.join(" ");
-}
+  const lang   = gap.lang.toUpperCase();
+  const bridge = gap.hookLabel === "secret reveal" || gap.hookLabel === "result reveal"
+    ? `The creator just revealed something exciting. Open with: "And speaking of that…" or similar.`
+    : gap.hookLabel === "prize reveal" || gap.hookLabel === "record hook"
+    ? `The creator just hit a milestone. Open with energy matching that moment.`
+    : `Use the creator's last words as a natural entry: "Just like ${gap.lastCreatorWords}…"`;
 
-// ─── Video pacing profile ─────────────────────────────────────────────────────
-// Computes the average silence between segments across the full transcript.
-// Used to normalise silence scoring for fast-edited vs slow-paced content.
-// A 0.4s gap in a hyper-edited MrBeast video is proportionally as significant
-// as a 2s gap in a slow vlog — this makes scoring content-agnostic.
-
-interface PacingProfile {
-  avgSilenceSec: number;   // mean gap between consecutive segments
-  silenceGate: number;     // minimum gap to count as "meaningful pause" (avg × 1.5)
-  synergyGate: number;     // gap threshold for the Synergy Bonus           (avg × 3)
-}
-
-function buildPacingProfile(segments: TranscriptSegment[]): PacingProfile {
-  const gaps: number[] = [];
-  for (let i = 0; i < segments.length - 1; i++) {
-    const g = segments[i + 1].start - (segments[i].start + segments[i].duration);
-    if (g > 0) gaps.push(g);
-  }
-  const avg = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 1.0;
-
-  // Relative thresholds calibrate to the video's own editing pace.
-  // Ceiling (min) ensures slow/vlog content keeps the original strict gates
-  // so many mediocre gaps don't all qualify for the Synergy Bonus.
-  // Floor (max) ensures fast-edited content (MrBeast) still gets meaningful signals.
-  //
-  //  Fast video (avg ≈ 0.05s): silenceGate=0.15s, synergyGate=0.30s  ← looser
-  //  Slow vlog  (avg ≈ 0.50s): silenceGate=0.50s, synergyGate=1.50s  ← original
-  return {
-    avgSilenceSec: avg,
-    silenceGate:   Math.min(0.50, Math.max(0.15, avg * 1.5)),
-    synergyGate:   Math.min(1.50, Math.max(0.30, avg * 3.0)),
-  };
+  return [
+    `INJECT ${AD_DURATION_DEFAULT}s AI SPOKESPERSON AD.`,
+    `Creator's last words: "${gap.lastCreatorWords}".`,
+    bridge,
+    `Match lighting and background of Frame A (${gap.frameA.toFixed(1)}s) exactly — color, depth, angle.`,
+    `Tone: ${TONE[gap.lang]}. Language: ${lang}.`,
+    gap.wpmSpike ? `High-pacing context — deliver at the same energy level, then ease into the pitch.` : "",
+    gap.pivotLabel === "classic pivot" || gap.pivotLabel === "sponsor bridge"
+      ? `Pivot phrase detected in next segment — mirror its transition energy.`
+      : "",
+  ].filter(Boolean).join(" ");
 }
 
 // ─── Selection ────────────────────────────────────────────────────────────────
-// Scores all consecutive pairs, then picks the top N with minimum spacing.
 
-function selectTopGaps(
+function selectTopSegments(
   segments: TranscriptSegment[],
   topN: number,
   minSpacingSec: number,
 ): ScoredGap[] {
-  const lang    = detectLanguage(segments);
-  const total   = segments[segments.length - 1].start + segments[segments.length - 1].duration;
-  const pacing  = buildPacingProfile(segments);
+  const lang  = detectLanguage(segments);
+  const total = segments[segments.length - 1].start + segments[segments.length - 1].duration;
 
   const candidates: ScoredGap[] = [];
   for (let i = 0; i < segments.length - 1; i++) {
-    const gap = scoreGap(segments[i], segments[i + 1], total, lang, pacing);
+    const gap = scoreSegment(segments[i], segments[i + 1], total, lang);
     if (gap) candidates.push(gap);
   }
 
@@ -365,24 +319,27 @@ export function formatTimestamp(seconds: number): string {
 }
 
 /**
- * Returns the Top-N "Golden Integration Points" for AI sponsor injection.
+ * Returns the Top-N "Perfect Entry Points" for AI ad injection.
  * Language (EN/FR) is auto-detected from the transcript.
+ * Silence is irrelevant — the AI ad is injected as new footage.
  */
 export function findGoldenSpots(
   segments: TranscriptSegment[],
-  topN = 2,
+  topN = 3,
   minSpacingSec = 45,
 ): GoldenSpot[] {
   if (segments.length < 2) return [];
-  return selectTopGaps(segments, topN, minSpacingSec).map((gap, i) => ({
-    spot_id:              `sponsor_${i + 1}`,
-    timestamp:            formatTimestamp(gap.frameA),
-    intensity_score:      gap.intensityScore,
-    frame_a_time:         parseFloat(gap.frameA.toFixed(3)),
-    frame_b_time:         parseFloat(gap.frameB.toFixed(3)),
-    context:              `Transition from "${gap.prevTopic}" → "${gap.nextTopic}"`,
-    language:             gap.lang,
-    ai_prompt_suggestion: buildPrompt(gap),
+  return selectTopSegments(segments, topN, minSpacingSec).map((gap, i) => ({
+    spot_id:               `sponsor_${i + 1}`,
+    timestamp:             formatTimestamp(gap.frameA),
+    intensity_score:       gap.intensityScore,
+    frame_a_time:          parseFloat(gap.frameA.toFixed(3)),
+    frame_b_time:          gap.frameB,
+    ad_duration_to_inject: AD_DURATION_DEFAULT,
+    last_creator_words:    gap.lastCreatorWords,
+    context:               `Transition from "${gap.prevTopic}" → "${gap.nextTopic}"`,
+    language:              gap.lang,
+    ai_prompt_suggestion:  buildPrompt(gap),
   }));
 }
 
