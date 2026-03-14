@@ -40,5 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# extracted frames — generated locally, never committed
+# generated locally, never committed
 output_frames/
+outputs/
