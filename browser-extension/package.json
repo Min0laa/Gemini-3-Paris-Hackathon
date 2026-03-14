@@ -24,7 +24,7 @@
     "host_permissions": [
       "https://studio.youtube.com/*",
       "https://www.youtube.com/*",
-      "http://localhost:8000/*"
+      "http://localhost:8001/*"
     ]
   }
 }

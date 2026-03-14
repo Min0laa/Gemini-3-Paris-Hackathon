@@ -6,11 +6,11 @@ import nikeLogoUrl from "url:~/assets/nikelogo.png"
 import holyLogoUrl from "url:~/assets/holylogo.png"
 import googleLogoUrl from "url:~/assets/googlelogo.png"
 import nikeProductUrl from "url:~/assets/nike.png"
-import holyProductUrl from "url:~/assets/hoyl.png"
+import holyProductUrl from "url:~/assets/holy.png"
 import googleProductUrl from "url:~/assets/phone.png"
 
 
-const HANDOFF_API = "http://localhost:8000"
+const HANDOFF_API = "http://localhost:8001"
 export const config: PlasmoCSConfig = {
   matches: [
     "https://studio.youtube.com/*/videos/upload*",
@@ -45,7 +45,11 @@ const RADIO_OPTIONS = [
     title: "Nike",
     subtitle: "Sportswear and athletic lifestyle brand",
     descriptionOnSelect:
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris."
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
+    backendProductImage: "nike.png",
+    productName: "Nike Kiger 10 Shoes",
+    scriptPart1: "Tired of slipping on muddy trails? You need the new Nike Kiger 10. They are super lightweight and pack absolute monster grip.",
+    scriptPart2: "These keep you completely locked in, so you can just focus on flying. Ready to upgrade your trail run? Hit the link below!"
   },
   {
     id: "2",
@@ -54,7 +58,11 @@ const RADIO_OPTIONS = [
     title: "Holy",
     subtitle: "The energetic beverage",
     descriptionOnSelect:
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident."
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident.",
+    backendProductImage: "holy.png",
+    productName: "Holy Energy Drink",
+    scriptPart1: "Need a real energy boost without the crash? Holy is the clean energy drink made for performers like you.",
+    scriptPart2: "Zero sugar, zero crash, just pure focus. Grab yours at the link below and feel the difference!"
   },
   {
     id: "3",
@@ -63,7 +71,11 @@ const RADIO_OPTIONS = [
     title: "Google",
     subtitle: "Technology and innovation company",
     descriptionOnSelect:
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit."
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit.",
+    backendProductImage: "phone.png",
+    productName: "Google Pixel 9",
+    scriptPart1: "This is the Google Pixel 9 — the phone with the smartest camera I have ever used. It just does the thinking for you.",
+    scriptPart2: "Incredible shots, all-day battery, and Google AI built right in. Check it out at the link below!"
   }
 ]
 
@@ -235,16 +247,18 @@ function formatTime(seconds: number): string {
 
 const YouTubeStudioPanel = () => {
   // Real injection spots from FastAPI — falls back to fixed positions if unavailable
-  const [apiSpots, setApiSpots] = useState<{ timestamp_seconds: number; frame_a_path: string; frame_b_path: string }[]>([])
+  const [apiSpots, setApiSpots] = useState<{ timestamp_sec: number; frame_a_path: string; frame_b_path: string }[]>([])
+  const [currentVideoId, setCurrentVideoId] = useState<string | null>(null)
 
   useEffect(() => {
     const match = window.location.href.match(/[?&]v=([a-zA-Z0-9_-]{11})/)
     const videoId = match?.[1]
     if (!videoId) return
-    fetch(`${HANDOFF_API}/api/spots/${videoId}`)
+    setCurrentVideoId(videoId)
+    fetch(`${HANDOFF_API}/hotspots/${videoId}`)
       .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.spots?.length) setApiSpots(data.spots)
+      .then((data: { timestamp_sec: number; frame_a_path: string; frame_b_path: string }[] | null) => {
+        if (Array.isArray(data) && data.length) setApiSpots(data)
       })
       .catch(() => { /* API unreachable — keep fixed positions */ })
   }, [])
@@ -308,7 +322,7 @@ const YouTubeStudioPanel = () => {
 
   // Use real API timestamps when available; fall back to fixed percentages
   const ZONE_POSITIONS: readonly [number, number, number] = apiSpots.length >= 3 && duration > 0
-    ? [apiSpots[0].timestamp_seconds / duration, apiSpots[1].timestamp_seconds / duration, apiSpots[2].timestamp_seconds / duration] as const
+    ? [apiSpots[0].timestamp_sec / duration, apiSpots[1].timestamp_sec / duration, apiSpots[2].timestamp_sec / duration] as const
     : [0.15, 0.48, 0.81] as const
 
   const canGenerate = selectedZone !== null && selectedOption !== null
@@ -319,12 +333,39 @@ const YouTubeStudioPanel = () => {
     return "Select a placement zone in the timeline"
   }
 
+  const [generatedAdVideoUrl, setGeneratedAdVideoUrl] = useState<string>(videoUrl)
+
   const handleGenerateClick = () => {
     if (canGenerate) {
       setGenerateDisabledReason(null)
       setIsGeneratingModalOpen(true)
       setGeneratingStatusIndex(0)
       setGeneratingPhase("loading")
+
+      const brand = RADIO_OPTIONS.find((o) => o.id === selectedOption)
+      if (brand && selectedZone !== null && currentVideoId) {
+        const params = new URLSearchParams({
+          video_id: currentVideoId,
+          hotspot_id: String(selectedZone + 1),
+          product_image_name: brand.backendProductImage,
+          product_name: brand.productName,
+          script_part1: brand.scriptPart1,
+          script_part2: brand.scriptPart2,
+        })
+        fetch(`${HANDOFF_API}/generate-ad?${params}`)
+          .then((r) => {
+            if (!r.ok) throw new Error("API error")
+            return r.blob()
+          })
+          .then((blob) => {
+            setGeneratedAdVideoUrl(URL.createObjectURL(blob))
+            setGeneratingPhase("result")
+          })
+          .catch(() => {
+            setGeneratedAdVideoUrl(videoUrl)
+            setGeneratingPhase("result")
+          })
+      }
     } else {
       setGenerateDisabledReason(getGenerateDisabledReason())
       setTimeout(() => setGenerateDisabledReason(null), 4000)
@@ -376,10 +417,8 @@ const YouTubeStudioPanel = () => {
         (i) => (i + 1) % GENERATING_STATUS_MESSAGES.length
       )
     }, 1800)
-    const resultTimeout = setTimeout(() => setGeneratingPhase("result"), 4000)
     return () => {
       clearInterval(statusInterval)
-      clearTimeout(resultTimeout)
     }
   }, [isGeneratingModalOpen])
 
@@ -1450,7 +1489,7 @@ const YouTubeStudioPanel = () => {
                     >
                       <video
                         ref={generatingResultVideoRef}
-                        src={videoUrl}
+                        src={generatedAdVideoUrl}
                         controls
                         autoPlay
                         onLoadedMetadata={handleResultVideoLoaded}

@@ -5,4 +5,4 @@ opencv-python-headless
 pandas
 numpy
 scipy
-google-genai
+google-genaipillow
