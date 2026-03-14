@@ -26,3 +26,5 @@ def read_root():
 @app.post("/items/")
 def create_item(item: Item):
     return item
+
+
