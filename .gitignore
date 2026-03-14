@@ -1,10 +1,12 @@
 **/*pycache*
 *.pyc
+venv/
 
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
 /node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -49,3 +51,6 @@ next-env.d.ts
 **/node_modules
 **/.next
 
+# plasmo / extension build output
+browser-extension/build
+.plasmo
