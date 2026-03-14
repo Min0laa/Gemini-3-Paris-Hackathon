@@ -1,12 +1,8 @@
 // =============================================================================
-// gemini-service.ts — AI Ad Generation Bridge
+// gemini-service.ts — Gemini API integration point
 //
-// This is the integration point for the Gemini API.
-// Your teammate calls validateSpotWithGemini() with the two frames' context
-// and receives a validated score + the AI generation prompt for the ad.
-//
-// STATUS: Mock mode — returns local score unchanged until API key is injected.
-// TO ACTIVATE: add GEMINI_API_KEY to .env and implement the TODO block below.
+// Currently mock: returns local score unchanged.
+// To activate: set GEMINI_API_KEY in .env and implement the TODO block.
 // =============================================================================
 
 export interface AdSpotContext {

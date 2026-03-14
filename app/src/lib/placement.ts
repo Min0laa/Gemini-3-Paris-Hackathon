@@ -1,17 +1,13 @@
 // =============================================================================
-// placement.ts — Perfect Entry Point Engine  (AI Ad Injection Mode)
+// placement.ts — Perfect Entry Point Engine
 //
-// Philosophy shift:
-//   OLD → find a "natural break" where the video breathes
-//   NEW → find the peak-energy moment to inject AI-generated ad footage
+// Scores transcript segments to find the best moments for AI ad injection.
+// Targets peak-energy moments (WPM spikes, hook keywords) rather than silence.
 //
-// The AI ad is inserted as new footage that PUSHES the original video forward.
-// No silence needed. We want the viewer at maximum attention, then cut in.
-//
-// Teammate handoff contract:
-//   frame_a_time        → last frame of the peak-energy segment (reference for AI lighting)
-//   frame_b_time        → frame_a_time + 0.1s  (clean bridge — always a hair after A)
-//   ad_duration_to_inject → how many seconds of AI footage to insert at this point
+// Output contract:
+//   frame_a_time          → last frame of the high-energy segment (lighting reference)
+//   frame_b_time          → frame_a_time + 0.1s (injection bridge)
+//   ad_duration_to_inject → seconds of AI footage to insert (default 15)
 // =============================================================================
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -30,7 +26,7 @@ export interface GoldenSpot {
   timestamp: string;
   intensity_score: number;          // 0–100 — higher = more energy at this moment
   frame_a_time: number;             // seconds — last frame of the peak-energy segment
-  frame_b_time: number;             // seconds — frame_a_time + 0.1 (clean bridge)
+  frame_b_time: number;             // seconds — frame_a_time + 0.1 (clean bridge, injection contract)
   ad_duration_to_inject: number;    // seconds of AI ad footage to insert here (default 15)
   last_creator_words: string;       // exact words the creator said just before the cut
   context: string;
@@ -47,8 +43,7 @@ export interface PlacementWindow {
 }
 
 // ─── Multilingual keyword dictionaries ───────────────────────────────────────
-// Each entry: raw string terms → compiled at module load into a single RegExp.
-// Add new terms by appending to the `terms` array — no regex knowledge needed.
+// Compiled to RegExp at module load. Add new terms to the `terms` array.
 
 type KW = { pattern: RegExp; weight: number; label: string };
 
@@ -57,8 +52,7 @@ function compile(terms: string[], weight: number, label: string): KW {
   return { pattern: new RegExp(`(${escaped.join("|")})`, "i"), weight, label };
 }
 
-// Hook keywords — signal a high-energy climax or reveal in the current segment.
-// These are the PRIMARY scoring driver (replaces silence as the main signal).
+// Hook keywords — high-energy vocabulary (primary scoring driver, ~60% weight).
 const HOOKS: Record<Lang, KW[]> = {
   en: [
     compile(["insane", "incredible", "unbelievable", "mind-blowing", "mind blowing", "unreal"], 25, "wow moment"),
@@ -93,8 +87,7 @@ const HOOKS: Record<Lang, KW[]> = {
   ],
 };
 
-// Pivot keywords — signal a section opener in the next segment.
-// Still scored but at lower weight — they confirm the energy peak is ending.
+// Pivot keywords — section-opener phrases in next segment (lower weight, confirms peak end).
 const PIVOTS: Record<Lang, KW[]> = {
   en: [
     compile(["but first", "before we go", "before i get", "before we continue"], 20, "classic pivot"),
@@ -176,17 +169,16 @@ function lastWords(text: string, n = 10): string {
 }
 
 // ─── Core segment scorer ──────────────────────────────────────────────────────
-// Evaluates segment[i] as a potential ad injection point.
-// Silence is IGNORED — the AI ad is inserted as new footage, pushing the video.
 // Score = f(WPM spike, Hype Bonus, Hook Keywords, Pivot, Sentence Boundary).
+// Silence is not scored — the ad is injected as new footage.
 
 interface ScoredGap {
-  frameA: number;           // end of prev segment = injection point
-  frameB: number;           // frameA + 0.1s       = clean bridge
-  intensityScore: number;   // final 0–100 score
-  prevTopic: string;        // first words of prev segment (context)
-  nextTopic: string;        // first words of next segment (context)
-  lastCreatorWords: string; // last words of prev segment (for AI prompt)
+  frameA: number;            // end of prev segment = injection point
+  frameB: number;            // frameA + 0.1s       = clean bridge (injection contract)
+  intensityScore: number;    // final 0–100 score
+  prevTopic: string;         // first words of prev segment (context)
+  nextTopic: string;         // first words of next segment (context)
+  lastCreatorWords: string;  // last words of prev segment (for AI prompt)
   hookLabel: string;
   pivotLabel: string;
   wpmSpike: boolean;
@@ -203,40 +195,30 @@ function scoreSegment(
 ): ScoredGap | null {
   const frameA = prev.start + prev.duration;
 
-  // Hard filter: only score inside 20%–75% of video length.
-  // Too early = viewer still in intro; too late = risk of abandonment.
+  // Only score 20–75% of video length (skip intro / outro).
   const relPos = frameA / totalDuration;
   if (relPos < 0.20 || relPos > 0.75) return null;
 
   let score = 0;
 
-  // 1. WPM Spike (0–35 pts) ─────────────────────────────────────────────────
-  // prev spoken 20%+ faster than next → speaker just hit a climax.
-  // Higher ratio = more intense the peak. Formula: min((ratio-1) × 70, 35).
+  // 1. WPM Spike (0–35 pts) — prev segment 20%+ faster than next.
   const prevWPM  = wpm(prev);
   const nextWPM  = wpm(next);
   const wpmSpike = prevWPM > nextWPM * 1.20;
   if (wpmSpike) score += Math.min((prevWPM / (nextWPM || 1) - 1) * 70, 35);
 
-  // 2. Hype Bonus (+20 pts) ─────────────────────────────────────────────────
-  // Very short segment (< 2s) at high speed = punchline or exclamation.
-  // The single most intense unit of speech possible.
+  // 2. Hype Bonus (+20 pts) — short, fast segment = punchline.
   if (prev.duration < 2.0 && prevWPM > 120) score += 20;
 
-  // 3. Hook keyword density (0–60 pts) ─────────────────────────────────────
-  // PRIMARY DRIVER — "insane!", "we won!", "secret is…" signal viewer is at
-  // peak attention. This is where we inject the AI ad.
+  // 3. Hook keyword density (0–60 pts) — primary scoring driver.
   const hook = hookDensity(prev.text, lang);
   score += hook.score;
 
-  // 4. Pivot keyword on next segment (0–20 pts) ─────────────────────────────
-  // "But first", "moving on" etc. confirm the energy peak is closing —
-  // the viewer won't miss a beat if we cut here.
+  // 4. Pivot keyword on next segment (0–20 pts) — confirms peak boundary.
   const pivot = pivotStrength(next.text, lang);
   if (pivot) score += pivot.score;
 
-  // 5. Clean sentence boundary on prev (+5 pts) ─────────────────────────────
-  // Segment ends in . ? ! → no mid-sentence cut, smoother for the viewer.
+  // 5. Clean sentence boundary on prev (+5 pts) — avoids mid-sentence cut.
   if (/[.?!](\s|$)/.test(prev.text.trimEnd())) score += 5;
 
   return {
@@ -254,8 +236,8 @@ function scoreSegment(
 }
 
 // ─── AI prompt builder ────────────────────────────────────────────────────────
-// Generates an aggressive "Transition Hook" prompt.
-// The AI spokesperson must feel like a natural continuation of the creator's words.
+// Builds a context-aware prompt for the AI ad generator.
+// Uses the creator's last words to make the transition feel seamless.
 
 const TONE: Record<Lang, string> = { en: "Enthusiastic/English", fr: "Enthousiaste/French" };
 
@@ -318,11 +300,7 @@ export function formatTimestamp(seconds: number): string {
     : `${m}:${String(s).padStart(2, "0")}`;
 }
 
-/**
- * Returns the Top-N "Perfect Entry Points" for AI ad injection.
- * Language (EN/FR) is auto-detected from the transcript.
- * Silence is irrelevant — the AI ad is injected as new footage.
- */
+/** Top-N injection points. Language (EN/FR) auto-detected from transcript. */
 export function findGoldenSpots(
   segments: TranscriptSegment[],
   topN = 3,
