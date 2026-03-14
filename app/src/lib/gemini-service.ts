@@ -1,74 +1,72 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// gemini-service.ts — Placeholder for Gemini API semantic validation
+// =============================================================================
+// gemini-service.ts — AI Ad Generation Bridge
 //
-// Currently: passes the local intensity score through unchanged (mock mode).
-// Later:     replace the TODO block with a real Gemini API call that receives
-//            the transcript context and returns a refined confidence score.
-// ─────────────────────────────────────────────────────────────────────────────
+// This is the integration point for the Gemini API.
+// Your teammate calls validateSpotWithGemini() with the two frames' context
+// and receives a validated score + the AI generation prompt for the ad.
+//
+// STATUS: Mock mode — returns local score unchanged until API key is injected.
+// TO ACTIVATE: add GEMINI_API_KEY to .env and implement the TODO block below.
+// =============================================================================
 
-export interface GeminiValidationInput {
-  prevText: string;   // transcript text of the high-energy segment
-  nextText: string;   // transcript text of the new section
-  localScore: number; // 0–100 score from the local scoring engine
+export interface AdSpotContext {
+  video_id: string;
+  frame_a_time: number;   // seconds — last frame of high-energy segment
+  frame_b_time: number;   // seconds — first frame of new section
+  prev_text: string;      // transcript text just before frame_a (the hook)
+  next_text: string;      // transcript text just after frame_b (new section)
+  local_score: number;    // 0–100 score from the local engine
   language: "fr" | "en";
 }
 
-export interface GeminiValidationResult {
-  validatedScore: number;  // 0–100, refined score after Gemini analysis
-  confidence: number;      // 0–1, how certain Gemini is about this spot
-  reasoning: string;       // human-readable explanation from Gemini
-  geminiUsed: boolean;     // false = mock mode, true = real API call
+export interface AdGenerationResult {
+  validated_score: number;    // 0–100, Gemini-refined score
+  confidence: number;         // 0–1
+  ai_generation_prompt: string; // prompt your teammate feeds into the AI ad generator
+  gemini_active: boolean;     // false = mock, true = real API
 }
 
-/**
- * Validates a Golden Spot candidate with the Gemini API.
- *
- * MOCK MODE (current): passes the local score through with a placeholder
- * reasoning string so the rest of the pipeline can be tested end-to-end.
- *
- * PRODUCTION MODE (future): uncomment the TODO block and inject your
- * Gemini API key via environment variable GEMINI_API_KEY.
- */
-export async function validateSpotWithGemini(
-  input: GeminiValidationInput,
-): Promise<GeminiValidationResult> {
+export async function validateAndGenerateAd(
+  ctx: AdSpotContext,
+): Promise<AdGenerationResult> {
 
-  // TODO: Inject Gemini API call here later
+  // ── TODO: Replace this block with the real Gemini API call ────────────────
   //
   // import { GoogleGenerativeAI } from "@google/generative-ai";
+  // const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+  // const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
   //
-  // const genAI  = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  // const model  = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  // const result = await model.generateContent(`
+  //   You are an expert at seamless AI-generated video ad insertion.
+  //   Language: ${ctx.language.toUpperCase()}
+  //   Local score: ${ctx.local_score}/100
   //
-  // const prompt = `
-  //   You are an expert YouTube ad placement analyst.
-  //   Language: ${input.language.toUpperCase()}
+  //   Frame A (${ctx.frame_a_time}s) — end of high-energy segment:
+  //   "${ctx.prev_text}"
   //
-  //   A local scoring engine gave this transition a score of ${input.localScore}/100.
+  //   Frame B (${ctx.frame_b_time}s) — start of new section:
+  //   "${ctx.next_text}"
   //
-  //   Segment ending here (high-energy):
-  //   "${input.prevText}"
+  //   1. Confirm this is a valid non-disruptive insertion point (yes/no).
+  //   2. Rate placement quality 0–100.
+  //   3. Write a one-sentence AI spokesperson generation prompt that matches
+  //      the lighting, background, and energy of Frame A so the ad is seamless.
   //
-  //   Segment starting here (new section):
-  //   "${input.nextText}"
-  //
-  //   Tasks:
-  //   1. Is this a natural, non-disruptive spot for a 30-second sponsor message? (yes/no)
-  //   2. Rate the placement quality from 0 to 100.
-  //   3. Explain your reasoning in one sentence.
-  //
-  //   Respond in JSON: { "score": number, "confidence": number, "reasoning": string }
-  // `;
-  //
-  // const result = await model.generateContent(prompt);
-  // const json   = JSON.parse(result.response.text());
-  // return { validatedScore: json.score, confidence: json.confidence, reasoning: json.reasoning, geminiUsed: true };
+  //   JSON: { "score": number, "confidence": number, "prompt": string }
+  // `);
+  // const json = JSON.parse(result.response.text());
+  // return { validated_score: json.score, confidence: json.confidence,
+  //          ai_generation_prompt: json.prompt, gemini_active: true };
+  // ─────────────────────────────────────────────────────────────────────────
 
-  // ── Mock response — remove once the TODO block above is active ────────────
+  // Mock: pass local score through, generate a static prompt from existing context
   return {
-    validatedScore: input.localScore,
-    confidence:     0,
-    reasoning:      "[Mock] Gemini validation not yet active — local score passed through.",
-    geminiUsed:     false,
+    validated_score:      ctx.local_score,
+    confidence:           0,
+    ai_generation_prompt: `Match the lighting and background of Frame A at ${ctx.frame_a_time}s. ` +
+                          `Seamlessly insert a 5–10s AI spokesperson ad in ${ctx.language.toUpperCase()} ` +
+                          `between frame_a (${ctx.frame_a_time}s) and frame_b (${ctx.frame_b_time}s). ` +
+                          `The previous content was: "${ctx.prev_text.slice(0, 80)}".`,
+    gemini_active:        false,
   };
 }
