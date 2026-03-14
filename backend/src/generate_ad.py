@@ -1,4 +1,5 @@
 import io
+import os
 import time
 from pathlib import Path
 from google import genai
@@ -6,6 +7,11 @@ from google.genai import types
 from PIL import Image
 import uuid
 import cv2
+
+IMAGES_DIR = Path(__file__).parent / "images"
+VIDEOS_DIR = Path(__file__).parent / "videos"
+IMAGES_DIR.mkdir(exist_ok=True)
+VIDEOS_DIR.mkdir(exist_ok=True)
 
 def intro_prompt(product_name, script):
   return (
@@ -43,7 +49,7 @@ def generate_composite(client, product_path, setting_path, prompt, output_path=N
   setting_img = Image.open(setting_path)
 
   response = client.models.generate_content(
-    model="gemini-2.0-flash-preview-image-generation",
+    model="gemini-3.1-flash-image-preview",
     contents=[
       prompt,
       product_img,
@@ -57,7 +63,7 @@ def generate_composite(client, product_path, setting_path, prompt, output_path=N
   for part in response.candidates[0].content.parts:
     if part.inline_data is not None:
       image = Image.open(io.BytesIO(part.inline_data.data))
-      out = output_path or (str(uuid.uuid4()) + ".png")
+      out = output_path or str(IMAGES_DIR / (str(uuid.uuid4()) + ".png"))
       image.save(out)
       return out
 
@@ -66,9 +72,10 @@ def generate_composite(client, product_path, setting_path, prompt, output_path=N
 
 def composite_prompt(product_name):
   return (
-      f"Naturally insert {product_name} into this scene. "
-      f"The product must match the scene's lighting, perspective, and shadows. "
-      f"Keep the subject and background exactly as they are — only add the product."
+      f"Create a new image by combining the elements from the provided images. "
+      f"Take the {product_name} in the first image and place it in the hands of the main person in the second image. "
+      f"The final image should be a photo-realistic shot of the person holding the {product_name} in their hands, presenting it. "
+      f"Make sure that the product's size is realistic compared to the person's size."
   )
 
 
@@ -79,7 +86,7 @@ def merge_videos(video_paths, output_path=None):
   width = int(caps[0].get(cv2.CAP_PROP_FRAME_WIDTH))
   height = int(caps[0].get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-  out_path = output_path or (str(uuid.uuid4()) + ".mp4")
+  out_path = output_path or str(VIDEOS_DIR / (str(uuid.uuid4()) + ".mp4"))
   writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
   for cap in caps:
@@ -94,39 +101,32 @@ def merge_videos(video_paths, output_path=None):
   return out_path
 
 
-def generate_ad(client, intro_path, outro_path, product_path, product_name, script):
+def generate_ad(client, intro_path, outro_path, product_path, product_name, intro_script, outro_script, existing_composite=None):
   """
   Full ad generation pipeline:
-    1. Composite the product into the intro frame
-    2. Composite the product into the outro frame
-    3. Generate intro video interpolation (subject pulls out product)
-    4. Generate outro video interpolation (subject puts product away)
+    1. Composite the product into the intro frame (skipped if existing_composite is provided)
+    2. Generate intro video interpolation (intro -> composite)
+    3. Generate outro video interpolation (composite -> outro)
 
   Returns:
-    Tuple of (intro_video_path, outro_video_path)
+    Path to the final merged video
   """
-  comp_prompt = composite_prompt(product_name)
-
-  print("Compositing product into intro frame...")
-  intro_composite_path = generate_composite(
-    client=client,
-    product_path=product_path,
-    setting_path=intro_path,
-    prompt=comp_prompt,
-  )
-
-  print("Compositing product into outro frame...")
-  outro_composite_path = generate_composite(
-    client=client,
-    product_path=product_path,
-    setting_path=outro_path,
-    prompt=comp_prompt,
-  )
+  if existing_composite:
+    print(f"Using existing composite: {existing_composite}")
+    intro_composite_path = existing_composite
+  else:
+    print("Compositing product into intro frame...")
+    intro_composite_path = generate_composite(
+      client=client,
+      product_path=product_path,
+      setting_path=intro_path,
+      prompt=composite_prompt(product_name),
+    )
 
   print("Generating intro video...")
   intro_video_path = generate_interpolation(
     client=client,
-    prompt=intro_prompt(product_name=product_name, script=script),
+    prompt=intro_prompt(product_name=product_name, script=intro_script),
     start_path=intro_path,
     end_path=intro_composite_path,
   )
@@ -134,8 +134,8 @@ def generate_ad(client, intro_path, outro_path, product_path, product_name, scri
   print("Generating outro video...")
   outro_video_path = generate_interpolation(
     client=client,
-    prompt=outro_prompt(product_name=product_name, script=script),
-    start_path=outro_composite_path,
+    prompt=outro_prompt(product_name=product_name, script=outro_script),
+    start_path=intro_composite_path,
     end_path=outro_path,
   )
 
@@ -145,14 +145,18 @@ def generate_ad(client, intro_path, outro_path, product_path, product_name, scri
   return final_video_path
 
 
+def _mime_type(path):
+  return "image/png" if str(path).lower().endswith(".png") else "image/jpeg"
+
+
 def generate_interpolation(client, prompt, start_path, end_path):
   with open(start_path, "rb") as f:
-    first_image = types.Image(image_bytes=f.read(), mime_type="image/jpeg")
+    first_image = types.Image(image_bytes=f.read(), mime_type=_mime_type(start_path))
   with open(end_path, "rb") as f:
-    last_image = types.Image(image_bytes=f.read(), mime_type="image/jpeg")
+    last_image = types.Image(image_bytes=f.read(), mime_type=_mime_type(end_path))
 
   operation = client.models.generate_videos(
-    model="veo-3.1-generate-preview",
+    model="veo-3.1-fast-generate-preview",
     prompt=prompt,
     image=first_image,
     config=types.GenerateVideosConfig(
@@ -165,23 +169,39 @@ def generate_interpolation(client, prompt, start_path, end_path):
     time.sleep(10)
     operation = client.operations.get(operation)
 
+  if operation.response is None:
+    raise RuntimeError(f"Video generation failed: {operation.error}")
+
+  if not operation.response.generated_videos:
+    raise RuntimeError(f"Video generation returned no videos. Full response: {operation.response}")
+
   video = operation.response.generated_videos[0]
   client.files.download(file=video.video)
-  out = str(uuid.uuid4()) + ".mp4"
+  out = str(VIDEOS_DIR / (str(uuid.uuid4()) + ".mp4"))
   video.video.save(out)
   return out
 
 
 if __name__ == "__main__":
-  client = genai.Client()
+  import argparse
+
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--composite-name", default=None, help="Name of an existing composite image in images/ to skip the compositing step")
+  args = parser.parse_args()
+
+  client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+  existing_composite = str(IMAGES_DIR / args.composite_name) if args.composite_name else None
 
   final_video = generate_ad(
     client=client,
-    intro_path="intro.jpg",
-    outro_path="outro.jpg",
-    product_path="product.png",
-    product_name="your product",
-    script="your script",
+    intro_path=str(IMAGES_DIR / "use_first.jpg"),
+    outro_path=str(IMAGES_DIR / "use_second.jpg"),
+    product_path=str(IMAGES_DIR / "nike.png"),
+    product_name="Nike Kiger 10 Shoes",
+    intro_script="Tired of slipping on muddy trails? You need the new Nike Kiger 10. They are super lightweight and pack absolute monster grip. ",
+    outro_script="These keep you completely locked in, so you can just focus on flying. Ready to upgrade your trail run? Hit the link below! ",
+    existing_composite=existing_composite,
   )
 
   print(f"Final video: {final_video}")

@@ -54,3 +54,5 @@ next-env.d.ts
 # plasmo / extension build output
 browser-extension/build
 .plasmo
+
+*/.wq
