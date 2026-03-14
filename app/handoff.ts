@@ -1,26 +1,26 @@
 /**
  * handoff.ts — Clean technical output for teammate integration
  *
- * Usage:
+ * CLI usage:
  *   npx tsx handoff.ts <VIDEO_ID>
+ *
+ * Also imported by server.ts as `analyzeVideo(videoId, baseUrl?)`.
  *
  * Output:
  *   outputs/VIDEO_ID/
- *     handoff.json          — raw timestamps only, no AI/scoring data
- *     spot_1/frame_a.jpg    — injection point frame
- *     spot_1/frame_b.jpg    — 5s later (visual reference)
- *     spot_2/...
- *     spot_3/...
+ *     handoff.json        — raw timestamps only, no AI/scoring data
+ *     spot_N/frame_a.jpg  — injection point frame
+ *     spot_N/frame_b.jpg  — 5s later (visual reference)
  *
  * Requires: yt-dlp + ffmpeg  (brew install yt-dlp ffmpeg)
  */
 
 import { execFileSync, execFile } from "child_process";
-import { mkdir, access, writeFile } from "fs/promises";
+import { mkdir, access, writeFile, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { YoutubeTranscript } from "youtube-transcript";
-import { findGoldenSpots, detectLanguage, TranscriptSegment } from "./src/lib/placement";
+import { findGoldenSpots, TranscriptSegment } from "./src/lib/placement";
 
 // ─── Output root ──────────────────────────────────────────────────────────────
 
@@ -106,35 +106,55 @@ function extractFrame(videoPath: string, timeSec: number, outputPath: string): P
   });
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-async function main() {
-  const videoId = process.argv[2];
-  if (!videoId) {
-    console.error("Usage: npx tsx handoff.ts <VIDEO_ID>");
-    process.exit(1);
-  }
+export interface HandoffSpot {
+  id: string;
+  timestamp_seconds: number;
+  frame_a_time: number;
+  frame_b_time: number;
+  frame_a_path: string;
+  frame_b_path: string;
+}
 
-  // 1. Fetch transcript and find injection points
-  console.log(`\nFetching transcript for ${videoId}…`);
+export interface HandoffResult {
+  video_id: string;
+  spots: HandoffSpot[];
+}
+
+// ─── Core function (used by CLI and server) ───────────────────────────────────
+
+/**
+ * Runs the full analysis pipeline for a video.
+ * - If outputs/VIDEO_ID/handoff.json already exists, returns it immediately (cache hit).
+ * - Otherwise fetches transcript, scores spots, downloads video, extracts frames.
+ *
+ * @param videoId  YouTube video ID
+ * @param baseUrl  Optional base URL (e.g. "http://localhost:3000") — when set,
+ *                 frame paths are returned as full URLs instead of relative paths.
+ */
+export async function analyzeVideo(videoId: string, baseUrl?: string): Promise<HandoffResult> {
+  const videoDir    = join(OUTPUTS_ROOT, videoId);
+  const handoffPath = join(videoDir, "handoff.json");
+
+  // Cache: return existing result if folder already processed
+  try {
+    await access(handoffPath);
+    const raw    = await readFile(handoffPath, "utf8");
+    const cached = JSON.parse(raw) as HandoffResult;
+    if (baseUrl) return injectBaseUrl(cached, videoId, baseUrl);
+    return cached;
+  } catch { /* not cached yet */ }
+
+  // Fetch transcript and score spots
   const transcript = await fetchTranscript(videoId);
   const spots      = findGoldenSpots(transcript, 3);
 
-  if (spots.length === 0) {
-    console.error("No spots found — transcript may be too short.");
-    process.exit(1);
-  }
+  if (spots.length === 0) throw new Error("No injection spots found — transcript too short or too uniform.");
 
-  // 2. Create output directory: outputs/VIDEO_ID/
-  const videoDir = join(OUTPUTS_ROOT, videoId);
   await mkdir(videoDir, { recursive: true });
 
-  // 3. Download video (cached after first run)
-  console.log("Preparing video…");
   const videoPath = await ensureVideo(videoId);
-
-  // 4. Extract frames for each spot
-  console.log("Extracting frames…");
 
   const handoffSpots = await Promise.all(spots.map(async (spot, i) => {
     const spotId  = `spot_${i + 1}`;
@@ -143,13 +163,10 @@ async function main() {
 
     const frameAPath = join(spotDir, "frame_a.jpg");
     const frameBPath = join(spotDir, "frame_b.jpg");
-    const frameBTime = spot.frame_a_time + 5; // 5s later for visual distinction
+    const frameBTime = spot.frame_a_time + 5;
 
     await extractFrame(videoPath, spot.frame_a_time, frameAPath);
-    console.log(`  ${spotId}/frame_a.jpg  @  ${spot.frame_a_time.toFixed(3)}s`);
-
     await extractFrame(videoPath, frameBTime, frameBPath);
-    console.log(`  ${spotId}/frame_b.jpg  @  ${frameBTime.toFixed(3)}s`);
 
     return {
       id:                spotId,
@@ -161,20 +178,44 @@ async function main() {
     };
   }));
 
-  // 5. Write handoff.json
-  const handoff = {
-    video_id: videoId,
-    spots:    handoffSpots,
-  };
+  const result: HandoffResult = { video_id: videoId, spots: handoffSpots };
 
-  const handoffPath = join(videoDir, "handoff.json");
-  await writeFile(handoffPath, JSON.stringify(handoff, null, 2));
+  await writeFile(handoffPath, JSON.stringify(result, null, 2));
 
-  console.log(`\nhandoff.json → ${handoffPath}`);
-  console.log(`\n✅ READY: ${videoDir}\n`);
+  if (baseUrl) return injectBaseUrl(result, videoId, baseUrl);
+  return result;
 }
 
-main().catch((err) => {
-  console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-});
+/** Replaces relative paths with full URLs for API responses. */
+function injectBaseUrl(result: HandoffResult, videoId: string, baseUrl: string): HandoffResult {
+  return {
+    ...result,
+    spots: result.spots.map((s) => ({
+      ...s,
+      frame_a_path: `${baseUrl}/outputs/${videoId}/${s.id}/frame_a.jpg`,
+      frame_b_path: `${baseUrl}/outputs/${videoId}/${s.id}/frame_b.jpg`,
+    })),
+  };
+}
+
+// ─── CLI entry point ──────────────────────────────────────────────────────────
+
+if (require.main === module || process.argv[1]?.endsWith("handoff.ts")) {
+  const videoId = process.argv[2];
+  if (!videoId) {
+    console.error("Usage: npx tsx handoff.ts <VIDEO_ID>");
+    process.exit(1);
+  }
+  console.log(`\nAnalyzing ${videoId}…`);
+  analyzeVideo(videoId)
+    .then((result) => {
+      const dir = join(OUTPUTS_ROOT, videoId);
+      console.log(`\nhandoff.json → ${join(dir, "handoff.json")}`);
+      console.log(`\n✅ READY: ${dir}\n`);
+      console.log(JSON.stringify(result, null, 2));
+    })
+    .catch((err) => {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
+}
