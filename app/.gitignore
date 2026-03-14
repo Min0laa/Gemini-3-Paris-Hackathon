@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local dev scripts (not for teammates)
+run-local.ts
+extract-frames.ts
+
+# extracted frames — generated locally, never committed
+output_frames/
