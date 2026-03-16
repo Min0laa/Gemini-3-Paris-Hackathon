@@ -1,7 +1,9 @@
 import { useRef, useState, useEffect } from "react"
 import type { PlasmoCSConfig, PlasmoGetInlineAnchor } from "plasmo"
 
-import videoUrl from "url:~/assets/videoplayback.mp4"
+import videoUrl from "url:~/assets/ai-add-nike.mp4"
+import googleVideoUrl from "url:~/assets/google-ai-pixel-ad.mp4"
+import previewVideoUrl from "url:~/assets/fullvideo.mp4"
 import nikeLogoUrl from "url:~/assets/nikelogo.png"
 import holyLogoUrl from "url:~/assets/holylogo.png"
 import googleLogoUrl from "url:~/assets/googlelogo.png"
@@ -43,7 +45,7 @@ const RADIO_OPTIONS = [
     title: "Nike",
     subtitle: "Sportswear and athletic lifestyle brand",
     descriptionOnSelect:
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris."
+      "Tired of slipping on muddy trails? You need the new Nike Kiger 10. They are super lightweight and pack absolute monster grip. These keep you completely locked in, so you can just focus on flying. Ready to upgrade your trail run? Hit the link below!"
   },
   {
     id: "2",
@@ -52,7 +54,7 @@ const RADIO_OPTIONS = [
     title: "Holy",
     subtitle: "The energetic beverage",
     descriptionOnSelect:
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident."
+      "Tired of feeling like a soggy potato by 3pm? You need Holy Energy. It's like someone plugged your brain directly into a lightning bolt… but in a tasty drink. Suddenly you're answering emails, finishing projects, and questioning why you ever drank sad office coffee. Ready to ascend? Grab a Holy and feel the power. Link below."
   },
   {
     id: "3",
@@ -61,7 +63,7 @@ const RADIO_OPTIONS = [
     title: "Google",
     subtitle: "Technology and innovation company",
     descriptionOnSelect:
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit."
+      "Still taking photos that look like they were captured by a potato? Meet the new Google Pixel 10. Ridiculously smart camera, insanely smooth performance, and AI that actually feels useful. From perfect night shots to editing photos like a pro in seconds, the Pixel 10 basically makes you look like you know what you're doing. Ready to upgrade your pocket tech? Hit the link below."
   }
 ]
 
@@ -73,6 +75,8 @@ const GENERATING_STATUS_MESSAGES = [
   "Analyzing frame...",
   "Building ad..."
 ]
+
+const LOADING_DURATION_MS = 10_000
 
 // Help/AI icon
 const HelpIcon = () => (
@@ -231,6 +235,8 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`
 }
 
+const STORAGE_KEY = "yt-studio-ai-ads-v1"
+
 const YouTubeStudioPanel = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [selectedOption, setSelectedOption] = useState<string | null>(null)
@@ -243,6 +249,7 @@ const YouTubeStudioPanel = () => {
     string | null
   >(null)
   const [isGeneratingModalOpen, setIsGeneratingModalOpen] = useState(false)
+  const [generatingBrandId, setGeneratingBrandId] = useState<string | null>(null)
   const [generatingStatusIndex, setGeneratingStatusIndex] = useState(0)
   const [generatingPhase, setGeneratingPhase] = useState<"loading" | "result">(
     "loading"
@@ -258,15 +265,36 @@ const YouTubeStudioPanel = () => {
       sponsorImage: string
       thumbnail: string
       zone: number
+      brandId: string
     }>
   >([])
   const [previewAdForModal, setPreviewAdForModal] = useState<{
     zone: number
+    brandId: string
   } | null>(null)
   const previewVideoRef = useRef<HTMLVideoElement>(null)
   const [selectedGeneratedAdIndex, setSelectedGeneratedAdIndex] = useState<
     number | null
   >(null)
+
+  // Restore persisted ads on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (parsed.generatedAdsList) setGeneratedAdsList(parsed.generatedAdsList)
+        if (parsed.savedAdFor) setSavedAdFor(parsed.savedAdFor)
+      }
+    } catch {}
+  }, [])
+
+  // Persist ads to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ generatedAdsList, savedAdFor }))
+    } catch {}
+  }, [generatedAdsList, savedAdFor])
 
   // Auto-select the last generated ad when the list grows
   useEffect(() => {
@@ -302,6 +330,7 @@ const YouTubeStudioPanel = () => {
   const handleGenerateClick = () => {
     if (canGenerate) {
       setGenerateDisabledReason(null)
+      setGeneratingBrandId(selectedOption)
       setIsGeneratingModalOpen(true)
       setGeneratingStatusIndex(0)
       setGeneratingPhase("loading")
@@ -356,7 +385,7 @@ const YouTubeStudioPanel = () => {
         (i) => (i + 1) % GENERATING_STATUS_MESSAGES.length
       )
     }, 1800)
-    const resultTimeout = setTimeout(() => setGeneratingPhase("result"), 4000)
+    const resultTimeout = setTimeout(() => setGeneratingPhase("result"), LOADING_DURATION_MS)
     return () => {
       clearInterval(statusInterval)
       clearTimeout(resultTimeout)
@@ -369,6 +398,7 @@ const YouTubeStudioPanel = () => {
       regenerateTimeoutRef.current = null
     }
     setIsGeneratingModalOpen(false)
+    setGeneratingBrandId(null)
   }
 
   const handleResultVideoLoaded = () => {
@@ -473,10 +503,29 @@ const YouTubeStudioPanel = () => {
                 margin: 0,
                 fontSize: "16px",
                 fontWeight: 500,
-                color: "#ffffff"
+                color: "#ffffff",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px"
               }}
             >
               Add AI-generated ads
+              <span
+                style={{
+                  display: "inline-block",
+                  padding: "3px 5px",
+                  fontSize: "9px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                  color: "#4d3a00",
+                  background: "#facc15",
+                  borderRadius: 3,
+                  lineHeight: 1
+                }}
+              >
+                New
+              </span>
             </h3>
             <div
               className="section-sublabel"
@@ -811,8 +860,8 @@ const YouTubeStudioPanel = () => {
                           borderRadius: 8,
                           cursor: "pointer",
                           border: isSelected
-                            ? "2px solid #4caf50"
-                            : "2px solid transparent"
+                            ? "1px solid #ffffff"
+                            : "1px solid transparent"
                         }}
                       >
                         <img
@@ -836,15 +885,46 @@ const YouTubeStudioPanel = () => {
                             borderRadius: 4
                           }}
                         />
-                        <span
+                        <div
                           style={{
-                            fontSize: 14,
-                            color: "#ffffff",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
                             flex: 1
                           }}
                         >
-                          {ad.sponsorTitle}
-                        </span>
+                          <span
+                            style={{
+                              fontSize: 14,
+                              color: "#ffffff"
+                            }}
+                          >
+                            {ad.sponsorTitle}
+                          </span>
+                          {isSelected && (
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                padding: "3px 6px",
+                                fontSize: "9px",
+                                fontWeight: 600,
+                                textTransform: "uppercase",
+                                letterSpacing: "0.5px",
+                                color: "#ffffff",
+                                background: "rgba(255, 255, 255, 0.2)",
+                                borderRadius: 3,
+                                lineHeight: 1
+                              }}
+                            >
+                              <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="#4caf50" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                              Selected
+                            </span>
+                          )}
+                        </div>
                         <div
                           style={{
                             display: "flex",
@@ -857,10 +937,10 @@ const YouTubeStudioPanel = () => {
                             type="button"
                             title="Preview"
                             onClick={() =>
-                              setPreviewAdForModal({ zone: ad.zone })
+                              setPreviewAdForModal({ zone: ad.zone, brandId: ad.brandId })
                             }
                             style={{
-                              padding: 6,
+                              padding: "6px 10px",
                               background: "#383838",
                               border: "1px solid #555",
                               borderRadius: 6,
@@ -868,12 +948,14 @@ const YouTubeStudioPanel = () => {
                               cursor: "pointer",
                               display: "flex",
                               alignItems: "center",
-                              justifyContent: "center"
+                              justifyContent: "center",
+                              gap: 6
                             }}
                           >
                             <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor">
                               <path d="M8 5v14l11-7z" />
                             </svg>
+                            Preview
                           </button>
                           <button
                             type="button"
@@ -956,7 +1038,8 @@ const YouTubeStudioPanel = () => {
                       padding: "12px",
                       background: selectedOption === opt.id ? "#383838" : "#2a2a2a",
                       borderRadius: "8px",
-                      cursor: "pointer"
+                      cursor: "pointer",
+                      border: selectedOption === opt.id ? "1px solid #ffffff" : "1px solid transparent"
                     }}
                   >
                     <div
@@ -1064,7 +1147,7 @@ const YouTubeStudioPanel = () => {
                 >
                 <video
                   ref={videoRef}
-                  src={videoUrl}
+                  src={previewVideoUrl}
                   controls
                   onTimeUpdate={handleTimeUpdate}
                   onLoadedMetadata={handleLoadedMetadata}
@@ -1430,15 +1513,18 @@ const YouTubeStudioPanel = () => {
                     >
                       <video
                         ref={generatingResultVideoRef}
-                        src={videoUrl}
+                        src={generatingBrandId === "3" ? googleVideoUrl : videoUrl}
                         controls
                         autoPlay
                         onLoadedMetadata={handleResultVideoLoaded}
+                        onError={(e) => {
+                          const v = e.currentTarget
+                          console.error("[Ad preview video error]", v.error?.message ?? "unknown", v.error?.code)
+                        }}
                         style={{
                           width: "100%",
                           height: "100%",
-                          objectFit: "contain",
-                          opacity: 0.7
+                          objectFit: "contain"
                         }}
                       />
                     </div>
@@ -1502,7 +1588,7 @@ const YouTubeStudioPanel = () => {
                           setGeneratingStatusIndex(0)
                           regenerateTimeoutRef.current = setTimeout(
                             () => setGeneratingPhase("result"),
-                            15000
+                            LOADING_DURATION_MS
                           )
                         }}
                         style={{
@@ -1539,7 +1625,8 @@ const YouTubeStudioPanel = () => {
                                   sponsorTitle: brand.title,
                                   sponsorImage: brand.image,
                                   thumbnail: thumb,
-                                  zone: selectedZone
+                                  zone: selectedZone,
+                                  brandId: brand.id
                                 }
                               ])
                             }
@@ -1606,7 +1693,7 @@ const YouTubeStudioPanel = () => {
           >
             <video
               ref={previewVideoRef}
-              src={videoUrl}
+              src={previewAdForModal.brandId === "3" ? googleVideoUrl : videoUrl}
               controls
               autoPlay
               onLoadedMetadata={() => {
